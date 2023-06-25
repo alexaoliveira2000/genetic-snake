@@ -21,30 +21,66 @@ window.onload = async function () {
         }
     });
 
-    let generations = 200;
-    let population = new Population(10, 0.01);
-    let environment = new Environment(context, 10, 10);
+    let generations = 1000;
+    let population = new Population(1000, 0.01);
+    let environment = new Environment(context, 5, 5);
+    let skip = true;
+    let doCrossover = true;
+    let run = false;
 
-    //let nn = new NeuralNetwork();
+    let trainButton = document.getElementById("train");
+    trainButton.addEventListener("click", async function() {
+        run = true;
+        for (let generation = 1; generation <= generations && run; generation++) {
+            console.log("generation", generation)
+            for (let agentNumber = 1; agentNumber <= population.members.length && run; agentNumber++) {
+                environment.reset();
+                environment.agent = population.members[agentNumber - 1];
+                await environment.run(skip && generation <= generations);
+            }
+            population.members = population.nextGeneration(doCrossover);
+        }
+        console.log("running best agent", population.bestAgent)
+        environment.reset();
+        environment.agent = population.bestAgent;
+        await environment.run();
+        console.log("training is over");
+    });
+
+    let resetButton = document.getElementById("reset");
+    resetButton.addEventListener("click", async function() {
+        run = false;
+        population = new Population(1000, 0.01);
+        environment = new Environment(context, 10, 10);
+    });
+
+    let nn = new NeuralNetwork();
     //let weights = nn.model.getWeights();
     //console.log(weights)
     //const convLayer = nn.model.getLayer(undefined, 0);
     //const convLayerConfig = convLayer.getConfig();
     //console.log(convLayerConfig);
     //console.log(convLayer.outputShape);
-    //nn.showShapes()
+    nn.showShapes()
 
-    let skip = false;
 
-    for (let generation = 1; generation <= generations; generation++) {
-        console.log("generation", generation)
-        for (let agentNumber = 1; agentNumber <= population.members.length; agentNumber++) {
-            environment.reset();
-            environment.agent = population.members[agentNumber - 1];
-            await environment.run(skip && generation < generations);
-        }
-        population.members = population.nextGeneration();
-    }
+    // let agent1 = population.members[0];
+    // let agent2 = population.members[1];
+    // console.log(agent1.brain.model.getWeights()[0].arraySync())
+    // console.log(agent2.brain.model.getWeights()[0].arraySync())
+    // //console.log(agent2)
+    // //agent1.brain.crossover(agent2.brain.model, 0.5)
+    // agent1.brain.crossover(agent2.brain.model, 0.5);
+    // console.log(agent1.brain.model.getWeights()[0].arraySync())
+    // console.log(agent2.brain.model.getWeights()[0].arraySync())
+
+
+    // environment.agent = population.members[0];
+    // environment.spawnHead();
+    // environment.generateApple();
+    // environment.agent.brain.showShapes();
+
+
 
     // environment.spawnHead();
     // environment.generateApple();
@@ -52,19 +88,13 @@ window.onload = async function () {
     // console.log(environment.normalizeInputs(environment.getGrid()))
 
 
-    // environment.agent = population.members[0];
-    // environment.spawnHead();
-    // environment.generateApple();
-    //let brain = environment.agent.brain;
+    // let brain = environment.agent.brain;
     // console.log(brain.model.getWeights()[0].arraySync())
     // brain.mutate(0.5);
     // console.log(brain.model.getWeights()[0].arraySync())
 
 
-    //updateModel(modelContext, environment);
-
-
-    console.log("acabou o jogo")
+    // updateModel(modelContext, environment);
 
 }
 

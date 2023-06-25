@@ -88,13 +88,16 @@ class Environment {
         this.agent = agent;
         this.grid = this.createGrid();
         this.snake = [];
-        this.timeout = 50;
+        this.timeout = 100;
+        this.movesLeft = this.timeout;
+        this.moves = 0;
     }
 
     reset() {
         this.grid = this.createGrid();
         this.snake = [];
-        this.timeout = 50;
+        this.moves = 0;
+        this.movesLeft = this.timeout;
     }
 
     createGrid() {
@@ -156,10 +159,9 @@ class Environment {
         // new head
         let newHead = head.nextSquare(this.grid);
         if (newHead.type === Type.APPLE) {
-            this.score++;
-            if (this.score === 100)
+            if (this.snake.length === this.width * this.height)
                 return false;
-            this.timeout = 50;
+            this.movesLeft = this.timeout;
             newHead.eatingApple = true;
             this.generateApple();
         }
@@ -252,18 +254,20 @@ class Environment {
         this.spawnHead();
         this.generateApple();
         do {
-            this.timeout--;
+            this.moves++;
+            this.movesLeft--;
             let inputs = this.normalizeInputs(this.getGrid());
             let predictions = this.agent.brain.predict(inputs);
             let movement = this.predictedAction(predictions);
             this.changeMovementTo(movement);
             if (!skip) {
                 this.update();
-                await new Promise(r => setTimeout(r, 100));
+                await new Promise(r => setTimeout(r, 10));
             }
-        } while (this.move() && this.timeout > 0);
+        } while (this.move() && this.movesLeft > 0);
         this.agent.score = this.snake.length - 1;
-        if (this.agent.score === 100)
+        //this.agent.score = Math.floor(this.moves / 10) + Math.pow(2, this.snake.length - 1);
+        if (this.snake.length === this.width * this.height)
             console.log("EXPERT")
     }
 }
@@ -289,12 +293,82 @@ class Population {
         this.members = [];
         for (let i = 1; i <= size; i++)
             this.members.push(new Agent(1, this.mutationRate));
+        this.bestAgent = this.members[0];
     }
 
-    nextGeneration() {
+    checkBestAgent() {
+        let bestAgentGeneration = this.members[0];
+        for (const agent of this.members)
+            if (agent.score > bestAgentGeneration.score)
+                bestAgentGeneration = agent;
+        if (bestAgentGeneration.score > this.bestAgent.score) {
+            this.bestAgent = bestAgentGeneration;
+            console.log("New best agent found:", this.bestAgent);
+        }
+    }
+
+    nextGeneration(doCrossover) {
+        // let newMembers = [];
+        // this.normalizeFitness();
+        // console.log(this.members);
+        // let bestAgent = this.members[0];
+        // for (const agent of this.members)
+        //     if (agent.fitness > bestAgent.fitness)
+        //         bestAgent = agent;
+        // for (const agent of this.members)
+        //     newMembers.push(new Agent(bestAgent.generation + 1, this.mutationRate, bestAgent.brain));
+        // return newMembers;
+
+        // this.normalizeFitness();
+        // this.checkBestAgent();
+        // let newMembers = [];
+        // let bestAgent = this.members[0];
+        // for (const agent of this.members)
+        //     if (agent.fitness > bestAgent.fitness)
+        //         bestAgent = agent;
+        // for (const agent of this.members) {
+        //     let crossoverAgent = bestAgent;
+        //     agent.brain.crossover(crossoverAgent.brain.model, 0.5);
+        //     let newAgent = new Agent(agent.generation + 1, this.mutationRate, agent.brain);
+        //     newMembers.push(newAgent);
+        // }
+        // return newMembers;
+
         this.normalizeFitness();
-        //if (this.members[0].generation === 200)
-            console.log(this.members);
+        this.checkBestAgent();
+        let newMembers = [];
+        let pool = this.createPool(this.members);
+        while (newMembers.length < this.members.length) {
+            let selectedAgent = this.poolSelection(pool);
+            if (doCrossover) {
+                let crossoverAgent = this.poolSelection(pool, selectedAgent);
+                selectedAgent.brain.crossover(crossoverAgent.brain.model, 0.5);
+                let newCrossoverAgent = new Agent(crossoverAgent.generation + 1, this.mutationRate, crossoverAgent.brain);
+                newMembers.push(newCrossoverAgent);
+            }
+            if (newMembers.length < this.members.length) {
+                let newAgent = new Agent(selectedAgent.generation + 1, this.mutationRate, selectedAgent.brain);
+                newMembers.push(newAgent);
+            }
+        }
+        return newMembers;
+    }
+
+    nextGeneration_old() {
+        // let newMembers = [];
+        // this.normalizeFitness();
+        // console.log(this.members);
+        // let bestAgent = this.members[0];
+        // for (const agent of this.members)
+        //     if (agent.fitness > bestAgent.fitness)
+        //         bestAgent = agent;
+        // for (const agent of this.members)
+        //     newMembers.push(new Agent(bestAgent.generation + 1, this.mutationRate, bestAgent.brain));
+        // return newMembers;
+
+        this.normalizeFitness();
+        this.checkBestAgent();
+        //console.log(this.members);
         let newMembers = [];
         let pool = this.createPool(this.members);
         while (newMembers.length < this.members.length) {
