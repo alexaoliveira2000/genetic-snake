@@ -77,23 +77,29 @@ class NeuralNetwork {
     });
   }
 
-  predict(inputs) {
-    return tf.tidy(() => {
-      const xs = tf.tensor([inputs.flat()], [1, 25]);
-      const ys = this.model.predict(xs);
-      const output = Array.from(ys.dataSync());
-      return output;
-    });
-  }
-
   // predict(inputs) {
   //   return tf.tidy(() => {
-  //     const xs = tf.tensor([inputs], [1, 5, 5, 1]);
+  //     const xs = tf.tensor([inputs.flat()], [1, 25]);
   //     const ys = this.model.predict(xs);
   //     const output = Array.from(ys.dataSync());
   //     return output;
   //   });
   // }
+
+  async train(inputs, targets) {
+    const xs = tf.tensor(inputs, [inputs.length, SIZE, SIZE, 1]);
+    const ys = tf.tensor(targets, [targets.length, 4]);
+    return await this.model.fit(xs, ys, { epochs: EPOCHS });
+  }
+
+  predict(inputs) {
+    return tf.tidy(() => {
+      const xs = tf.tensor([inputs], [1, SIZE, SIZE, 1]);
+      const ys = this.model.predict(xs);
+      const output = Array.from(ys.dataSync());
+      return output;
+    });
+  }
 
   crossover(model, crossoverProbability) {
     let weightsModel1 = this.model.getWeights();
@@ -155,49 +161,55 @@ class NeuralNetwork {
     return model;
   }
 
-  createModel() {
-    const model = tf.sequential();
-    const hiddenLayer1 = tf.layers.dense({
-      units: 20,
-      inputShape: 25,
-      activation: "relu"
-    });
-    model.add(hiddenLayer1);
-    model.add(tf.layers.batchNormalization());
-    const hiddenLayer2 = tf.layers.dense({
-      units: 10,
-      inputShape: 20,
-      activation: "relu"
-    });
-    model.add(hiddenLayer2);
-    model.add(tf.layers.batchNormalization());
-    const outputLayer = tf.layers.dense({
-      units: 4,
-      activation: "softmax"
-    });
-    model.add(outputLayer);
-    return model;
-  }
-
   // createModel() {
   //   const model = tf.sequential();
-  //   model.add(tf.layers.conv2d({
-  //     inputShape: [5, 5, 1],
-  //     filters: 2,
-  //     kernelSize: 3,
-  //     padding: 'valid',
-  //     strides: [1, 1],
-  //     activation: 'relu'
-  //   }));
+  //   const hiddenLayer1 = tf.layers.dense({
+  //     units: 20,
+  //     inputShape: 25,
+  //     activation: "relu"
+  //   });
+  //   model.add(hiddenLayer1);
   //   model.add(tf.layers.batchNormalization());
-  //   //model.add(tf.layers.maxPooling2d({ poolSize: 2 }));
-  //   model.add(tf.layers.flatten());
-  //   //model.add(tf.layers.dense({ units: 50, activation: "relu" }));
-  //   //model.add(tf.layers.dropout({ rate: 0.2 }));
+  //   const hiddenLayer2 = tf.layers.dense({
+  //     units: 10,
+  //     inputShape: 20,
+  //     activation: "relu"
+  //   });
+  //   model.add(hiddenLayer2);
   //   model.add(tf.layers.batchNormalization());
-  //   model.add(tf.layers.dense({ units: 4, activation: 'softmax' }));
+  //   const outputLayer = tf.layers.dense({
+  //     units: 4,
+  //     activation: "softmax"
+  //   });
+  //   model.add(outputLayer);
   //   return model;
   // }
+
+  createModel() {
+    const model = tf.sequential();
+    model.add(tf.layers.conv2d({
+      inputShape: [SIZE, SIZE, 1],
+      filters: 4,
+      kernelSize: 2,
+      padding: 'valid',
+      strides: [1, 1],
+      activation: 'relu'
+    }));
+    model.add(tf.layers.batchNormalization());
+    //model.add(tf.layers.maxPooling2d({ poolSize: 2 }));
+    model.add(tf.layers.flatten());
+    model.add(tf.layers.dense({ units: 30, activation: "relu" }));
+    //model.add(tf.layers.dropout({ rate: 0.2 }));
+    //model.add(tf.layers.batchNormalization());
+    model.add(tf.layers.dense({ units: 4, activation: 'linear' }));
+
+    model.compile({
+      loss: 'meanSquaredError',
+      optimizer: 'adam',
+    });
+
+    return model;
+  }
 
   showShapes() {
     for (let i = 0; i < 4; i++) {

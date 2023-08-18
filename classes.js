@@ -7,11 +7,11 @@ const Type = {
 }
 
 const Movement = {
-    STILL: 0,
-    UP: 1,
-    RIGHT: 2,
-    DOWN: 3,
-    LEFT: 4
+    UP: 0,
+    RIGHT: 1,
+    DOWN: 2,
+    LEFT: 3,
+    STILL: 4
 }
 
 class Square {
@@ -37,10 +37,10 @@ class Square {
                 this.context.fillStyle = "purple";
                 break;
             case Type.SNAKE_HEAD:
-                this.context.fillStyle = "black";
+                this.context.fillStyle = "darkgreen";
                 break;
             case Type.SNAKE_BODY:
-                this.context.fillStyle = "gray";
+                this.context.fillStyle = "green";
                 break;
         }
         if (this.type !== Type.SPACE)
@@ -54,17 +54,11 @@ class Square {
     }
 
     hitsWall(width, height) {
-        if (this.movement === Movement.UP && this.y === 0) {
-            return true;
-        } else if (this.movement === Movement.DOWN && this.y === height - 1) {
-            return true;
-        } else if (this.movement === Movement.LEFT && this.x === 0) {
-            return true;
-        } else if (this.movement === Movement.RIGHT && this.x === width - 1) {
-            return true;
-        } else {
-            return false;
-        }
+        const hitsUpWall = this.movement === Movement.UP && this.y === 0;
+        const hitsDownWall = this.movement === Movement.DOWN && this.y === height - 1;
+        const hitsLeftWall = this.movement === Movement.LEFT && this.x === 0;
+        const hitsRightWall = this.movement === Movement.RIGHT && this.x === width - 1;
+        return hitsUpWall || hitsDownWall || hitsLeftWall || hitsRightWall;
     }
 
     nextSquare(grid) {
@@ -80,26 +74,309 @@ class Square {
     }
 }
 
-class Environment {
-    constructor(context, width, height, agent) {
+// stores: state (previous grid), action (Movement), reward (value) and nextState (current grid)
+class Experience {
+    constructor(state, action, reward, nextState, isDone) {
+        this.state = state;
+        this.action = action;
+        this.reward = reward;
+        this.nextState = nextState;
+        this.isDone = isDone;
+    }
+}
+
+// stores and manages an array of experiences
+class ReplayMemory {
+    constructor(size) {
+        this.size = size;
+        this.memories = [];
+    }
+
+    push(experience) {
+        if (this.memories.length >= this.size)
+            this.memories.shift();
+        this.memories.push(experience);
+    }
+
+    batch(size) {
+        if (size >= this.memories.length) {
+            return this.memories;
+        } else {
+            let selectedMemories = [];
+            while (selectedMemories.length < size) {
+                const memory = this.memories[Math.floor(Math.random() * this.memories.length)];
+                if (!selectedMemories.includes(memory))
+                    selectedMemories.push(memory);
+            }
+            return selectedMemories;
+        }
+    }
+
+    isFull() {
+        return this.memories.length == this.size;
+    }
+}
+
+// environment agent
+class DQNAgent {
+    constructor(mutationRate) {
+        this.mutationRate = mutationRate;
+        this.memory = new ReplayMemory(MEMORY_SIZE);
+        this.onlineBrain = new NeuralNetwork();
+        this.targetBrain = this.onlineBrain.copy();
+        this.epsilon = EPSILON_MAX;
+        this.updateInterval = UPDATE_INTERVAL;
+    }
+
+    isExploration() {
+        // if (this.epsilon > EPSILON_MIN)
+        //     this.epsilon *= EPSILON_DECAY;
+        return Math.random() < this.epsilon;
+    }
+
+    normalizeInputs(inputs) {
+        const flattenedInputs = inputs.flat(2);
+        const min = Math.min(...flattenedInputs);
+        const max = Math.max(...flattenedInputs);
+        const normalizedInputs = inputs.map((row) =>
+            row.map((subArray) =>
+                subArray.map((value) => (value - min) / (max - min))
+            )
+        );
+        return normalizedInputs;
+    }
+
+    predictedAction(state) {
+        if (!this.memory.isFull() || this.isExploration()) {
+            let randomAction = Math.floor(Math.random() * 4);
+            if (randomAction === 0)
+                return Movement.UP;
+            if (randomAction === 1)
+                return Movement.RIGHT;
+            if (randomAction === 2)
+                return Movement.DOWN;
+            return Movement.LEFT;
+        } else {
+            //let inputs = this.normalizeInputs(state);
+            let prediction = this.targetBrain.predict(state);
+            //console.log(prediction)
+            return this.predictionToAction(prediction);
+        }
+    }
+
+    predictionToAction(prediction) {
+        let actionIndex = 0;
+        for (let i = 1; i < prediction.length; i++)
+            if (prediction[i] > prediction[actionIndex])
+                actionIndex = i;
+        if (actionIndex === 0)
+            return Movement.UP;
+        if (actionIndex === 1)
+            return Movement.RIGHT;
+        if (actionIndex === 2)
+            return Movement.DOWN;
+        return Movement.LEFT;
+    }
+
+    async train(batchSize) {
+        // get a batch of experiences from replay memory
+        let experiences = this.memory.batch(batchSize);
+
+        // calculate new next states reward
+        let targetPredictions = experiences.map(experience => this.targetBrain.predict(experience.nextState));
+        for (let i = 0; i < experiences.length; i++) {
+            let nextStateMaxQ = Math.max(...targetPredictions[i]);
+            for (let j = 0; j < targetPredictions[i].length; j++) {
+                if (!experiences[i].isDone)
+                    targetPredictions[i][j] = experiences[i].reward + GAMMA * nextStateMaxQ;
+                else
+                    targetPredictions[i][j] = experiences[i].reward;
+            }
+            // let nextStateMaxQ = Math.max(...targetPredictions[i]);
+            // if (experiences[i].isDone)
+            //     targetPredictions[i][experiences[i].action] = experiences[i].reward;
+            // else
+            //     targetPredictions[i][experiences[i].action] = experiences[i].reward + GAMMA * nextStateMaxQ;
+        }
+
+        // train the online network
+        const history = await this.onlineBrain.train(experiences.map(experience => experience.state), targetPredictions);
+        //console.log(history)
+
+        // update the target network weights (equal to online network) at regular intervals
+        if (this.updateInterval == 0) {
+            //this.targetBrain.model.setWeights(this.onlineBrain.model.getWeights());
+            this.targetBrain = this.onlineBrain.copy();
+            this.updateInterval = UPDATE_INTERVAL;
+        } else {
+            this.updateInterval--;
+        }
+    }
+
+    async trainOld(batchSize) {
+        // get a batch of experiences from replay memory
+        let experiences = this.memory.batch(batchSize);
+
+        // get normalized states and nextStates from experiences
+        let states = experiences.map(experience => this.normalizeInputs(experience.state));
+        let nextStates = experiences.map(experience => this.normalizeInputs(experience.nextState));
+
+        // get the q-values for the action performed on the experience using the online network
+        //let onlinePredictions = states.map(state => this.onlineBrain.predict(state));
+        // let onlineQValues = [];
+        // for (let i = 0; i < experiences.length; i++)
+        //     onlineQValues.push(onlinePredictions[i][experiences[i].action]);
+
+        // get the predicted q-values of the best actions using the target network
+        //let targetPredictions = nextStates.map(state => this.targetBrain.predict(state));
+        // let actions = targetPredictions.map(prediction => this.predictionToAction(prediction));
+        // let targetQValues = [];
+        // for (let i = 0; i < experiences.length; i++)
+        //     targetQValues.push(targetPredictions[i][actions[i]]);
+
+        // calculate target reward
+        let targetPredictions = nextStates.map(state => this.targetBrain.predict(state));
+        for (let i = 0; i < experiences.length; i++) {
+
+            //targetPredictions[i][experiences[i].action] += experiences[i].reward;
+
+            // if (experiences[i].reward === -1)
+            //     targetPredictions[i][experiences[i].action] = experiences[i].reward;
+            // else
+            //     targetPredictions[i][experiences[i].action] += experiences[i].reward;
+
+            let nextStateMaxQ = Math.max(...targetPredictions[i]);
+
+            if (experiences[i].isDone)
+                targetPredictions[i][experiences[i].action] = experiences[i].reward;
+            else
+                targetPredictions[i][experiences[i].action] = experiences[i].reward + GAMMA * nextStateMaxQ;
+            //targetPredictions[i][experiences[i].action] = experiences[i].reward + nextStateMaxQ;
+        }
+
+        // train the online network
+        const history = await this.onlineBrain.train(states, targetPredictions);
+        //console.log(history)
+
+        // update the target network weights (equal to online network) at regular intervals
+        if (this.updateInterval == 0) {
+            //this.targetBrain.model.setWeights(this.onlineBrain.model.getWeights());
+            this.targetBrain = this.onlineBrain.copy();
+            this.updateInterval = UPDATE_INTERVAL;
+        } else {
+            this.updateInterval--;
+        }
+    }
+}
+
+class DQNEnvironment {
+    constructor(context, width, height) {
         this.context = context;
         this.width = width;
         this.height = height;
-        this.agent = agent;
-        this.grid = this.createGrid();
-        this.snake = [];
-        this.timeout = 100;
-        this.movesLeft = this.timeout;
-        this.moves = 0;
+        this.agent = new DQNAgent(0.01);
+        this.reset();
+
+        // moves left to start storing experiences
+        // this.trainingGap = 0;
+        // this.hungerPenalty = 10;
+        // this.distanceReward = 0;
+
     }
 
+    // reset variables for next episode
     reset() {
         this.grid = this.createGrid();
         this.snake = [];
         this.moves = 0;
-        this.movesLeft = this.timeout;
+        this.movesLeft = MAX_MOVES;
+        this.apple = null;
+        this.lastMovement = Movement.STILL;
     }
 
+    calculateReward(action) {
+        let head = this.snake[this.snake.length - 1];
+
+        if (this.lastMovement == Movement.RIGHT && head.movement == Movement.LEFT)
+            return -1;
+        if (this.lastMovement == Movement.LEFT && head.movement == Movement.RIGHT)
+            return -1;
+        if (this.lastMovement == Movement.UP && head.movement == Movement.DOWN)
+            return -1;
+        if (this.lastMovement == Movement.DOWN && head.movement == Movement.UP)
+            return -1;
+
+        if (action === Movement.RIGHT) {
+            if (head.x === this.width - 1)
+                return -1;
+            if (head.x + 1 === this.apple.x && head.y === this.apple.y)
+                return 1;
+        }
+        if (action === Movement.LEFT) {
+            if (head.x === 0)
+                return -1;
+            if (head.x - 1 === this.apple.x && head.y === this.apple.y)
+                return 1;
+        }
+        if (action === Movement.UP) {
+            if (head.y === 0)
+                return -1;
+            if (head.x === this.apple.x && head.y - 1 === this.apple.y)
+                return 1;
+        }
+        if (action === Movement.DOWN) {
+            if (head.y === this.height - 1)
+                return -1;
+            if (head.x === this.apple.x && head.y + 1 === this.apple.y)
+                return 1;
+        }
+        let distance = Math.sqrt(Math.pow(head.x - this.apple.x, 2) + Math.pow(head.y - this.apple.y, 2));
+        return 1 / Math.max(1, distance);
+    }
+
+    calculateRewardAdvanced(action) {
+
+        let distanceReward = 0;
+        let hungerReward = 0;
+
+        let head = this.snake[this.snake.length - 1];
+        let currentDistanceHeadTarget = Math.abs(head.y - this.apple.y) + Math.abs(head.x - this.apple.x);
+        let nextDistanceHeadTarget;
+        if (action === Movement.RIGHT)
+            nextDistanceHeadTarget = Math.abs(head.y - this.apple.y) + Math.abs(head.x + 1 - this.apple.x);
+        else if (action === Movement.LEFT)
+            nextDistanceHeadTarget = Math.abs(head.y - this.apple.y) + Math.abs(head.x - 1 - this.apple.x);
+        else if (action === Movement.UP)
+            nextDistanceHeadTarget = Math.abs(head.y - 1 - this.apple.y) + Math.abs(head.x - this.apple.x);
+        else
+            nextDistanceHeadTarget = Math.abs(head.y + 1 - this.apple.y) + Math.abs(head.x - this.apple.x);
+
+        // console.log("head", head)
+        // console.log("currentDistanceHeadTarget", currentDistanceHeadTarget)
+        // console.log("nextDistanceHeadTarget", nextDistanceHeadTarget)
+
+        if (!nextDistanceHeadTarget) {
+            //this.trainingGap = this.snake.length <= 10 ? 6 : 0.4 * this.snake.length + 2;
+            return 1;
+        } else if (this.snake.length > 1) {
+            distanceReward = parseInt(Math.log((this.snake.length + currentDistanceHeadTarget) / (this.snake.length + nextDistanceHeadTarget)) / Math.log(this.snake.length));
+        }
+
+        if (this.timeout - this.movesLeft > this.hungerPenalty) {
+            hungerReward = -0.5 / this.snake.length;
+        }
+
+        // console.log("this.snake.length", this.snake.length)
+        // console.log("distanceReward", distanceReward)
+        // console.log("hungerReward", hungerReward)
+        // console.log("this.timeout", this.timeout)
+        // console.log("this.hungerPenalty", this.hungerPenalty)
+        // console.log("this.movesLeft", this.movesLeft)
+
+        return distanceReward + hungerReward;
+    }
+
+    // returns an empty grid
     createGrid() {
         let grid = [];
         for (let y = 0; y < this.height; y++)
@@ -109,6 +386,7 @@ class Environment {
         return grid;
     }
 
+    // returns a copy of the grid (state)
     getGrid() {
         let result = [];
         for (let row of this.grid)
@@ -116,33 +394,38 @@ class Environment {
         return result;
     }
 
+    printGrid() {
+        let squareToLetter = function (square) {
+            if (square.type == Type.SPACE) return " ";
+            if (square.type == Type.SNAKE_HEAD) return "H";
+            if (square.type == Type.SNAKE_BODY) return "B";
+            if (square.type == Type.APPLE) return "A";
+            if (square.type == Type.EATEN_APPLE) return "E";
+        }
+        this.grid.forEach(function (row, index) {
+            const rowString = row.map(square => squareToLetter(square));
+            console.log(index + " > " + rowString.join("|"));
+        });
+    }
+
+    // updates all grid squares visually
     update() {
         for (const row of this.grid)
             for (const square of row)
                 square.update();
     }
 
-    spawnHead() {
-        let x = Math.floor(this.width / 2);
-        let y = Math.floor(this.height / 2);
+    // spawns the snake's head
+    spawnHead(x, y) {
+        if (!(x >= 0 && x < SIZE && y >= 0 && y < SIZE)) {
+            x = Math.floor(this.width / 2);
+            y = Math.floor(this.height / 2);
+        }
         this.grid[x][y].type = Type.SNAKE_HEAD;
         this.snake.push(this.grid[x][y]);
     }
 
-    predictedAction(prediction) {
-        let actionIndex = 0;
-        for (let i = 1; i < prediction.length; i++)
-            if (prediction[i] > prediction[actionIndex])
-                actionIndex = i;
-        if (actionIndex === 0)
-            return Movement.UP;
-        if (actionIndex === 1)
-            return Movement.DOWN;
-        if (actionIndex === 2)
-            return Movement.LEFT;
-        return Movement.RIGHT;
-    }
-
+    // changes the head movement
     changeMovementTo(movement) {
         this.snake[this.snake.length - 1].movement = movement;
     }
@@ -161,7 +444,7 @@ class Environment {
         if (newHead.type === Type.APPLE) {
             if (this.snake.length === this.width * this.height)
                 return false;
-            this.movesLeft = this.timeout;
+            this.movesLeft = MAX_MOVES;
             newHead.eatingApple = true;
             this.generateApple();
         }
@@ -172,7 +455,9 @@ class Environment {
         if (this.snake.includes(newHead) && newHead !== tail)
             return false;
 
+        // if head is going to hit tail
         if (newHead === tail) {
+            // if tail is EATEN_APPLE (snake will grow), game ends
             if (tail.type === Type.EATEN_APPLE) {
                 return false;
             }
@@ -196,7 +481,6 @@ class Environment {
             } else if (tail.type === Type.EATEN_APPLE) {
                 tail.type = Type.SNAKE_BODY;
             }
-
             // change from SNAKE_HEAD to EATEN_APPLE
             if (!head.eatingApple) {
                 head.type = Type.SNAKE_BODY;
@@ -217,15 +501,14 @@ class Environment {
                 head.type = Type.SNAKE_BODY;
             }
         }
-
         this.snake.push(newHead);
-
         return true;
     }
 
+    // generates an apple on a random empty square
     generateApple(x, y) {
         let square;
-        if (x && y) {
+        if (x >= 0 && x < SIZE && y >= 0 && y < SIZE) {
             square = this.grid[x][y];
         } else {
             do {
@@ -236,176 +519,76 @@ class Environment {
         }
         square.type = Type.APPLE;
         square.changeMovementTo(Movement.STILL);
+        this.apple = square;
     }
 
-    normalizeInputs(inputs) {
-        const flattenedInputs = inputs.flat(2);
-        const min = Math.min(...flattenedInputs);
-        const max = Math.max(...flattenedInputs);
-        const normalizedInputs = inputs.map((row) =>
-            row.map((subArray) =>
-                subArray.map((value) => (value - min) / (max - min))
-            )
-        );
-        return normalizedInputs;
-    }
-
-    async run(skip) {
+    async play() {
         this.spawnHead();
         this.generateApple();
+        let hasMoved = false;
+        do {
+            hasMoved = this.move();
+            if (hasMoved) {
+                this.update();
+                await new Promise(r => setTimeout(r, 500));
+            }
+        } while (hasMoved && this.movesLeft > 0);
+    }
+
+    async run(initialization, skip) {
+
+        this.spawnHead();
+        //this.generateApple(2, 3);
+        this.generateApple();
+        let hasMoved = false;
+
+        if (!initialization) {
+            this.update();
+            if (!skip) await new Promise(r => setTimeout(r, 100));
+        }
+
+        // if (!initialization)
+        //     this.printGrid()
+
         do {
             this.moves++;
             this.movesLeft--;
-            let inputs = this.normalizeInputs(this.getGrid());
-            let predictions = this.agent.brain.predict(inputs);
-            let movement = this.predictedAction(predictions);
-            this.changeMovementTo(movement);
-            if (!skip) {
+            let state = this.getGrid();
+
+            // perform action (epsilon-greedy strategy)
+            let action = this.agent.predictedAction(state);
+            this.changeMovementTo(action);
+
+            // get reward and next state
+            let reward = this.calculateReward(action);
+            hasMoved = this.move();
+            let nextState = this.getGrid();
+
+            let experience = new Experience(state, action, reward, nextState, !hasMoved);
+            this.agent.memory.push(experience);
+            this.lastMovement = action;
+
+            // train agent if replay memory is full
+            // if (this.agent.memory.isFull() && !initialization) {
+            //     await this.agent.train(BATCH_SIZE);
+            // }
+
+            // if (!initialization && this.snake.length > 1) {
+            //     let goodExperiences = this.agent.memory.memories.filter(memory => memory.reward > 0);
+            //     console.log(goodExperiences)
+            // }
+
+            if (!skip && hasMoved) {
                 this.update();
-                await new Promise(r => setTimeout(r, 10));
+                await new Promise(r => setTimeout(r, 100));
             }
-        } while (this.move() && this.movesLeft > 0);
-        this.agent.score = this.snake.length - 1;
-        //this.agent.score = Math.floor(this.moves / 10) + Math.pow(2, this.snake.length - 1);
-        if (this.snake.length === this.width * this.height)
-            console.log("EXPERT")
-    }
-}
 
-class Agent {
-    constructor(generation, mutationRate, brain) {
-        this.score = 0;
-        this.fitness = 0;
-        this.generation = generation;
-        if (brain instanceof NeuralNetwork) {
-            this.brain = brain.copy();
-            this.brain.mutate(mutationRate);
-        } else {
-            this.brain = new NeuralNetwork();
-        }
-    }
-}
+            // if (!initialization) {
+            //     let actionString = action == Movement.RIGHT ? "right" : action == Movement.LEFT ? "left" : action == Movement.UP ? "up" : "down"
+            //     console.log("action: " + actionString)
+            //     if (hasMoved) this.printGrid()
+            // }
 
-class Population {
-    constructor(size, mutationRate) {
-        this.size = size;
-        this.mutationRate = mutationRate;
-        this.members = [];
-        for (let i = 1; i <= size; i++)
-            this.members.push(new Agent(1, this.mutationRate));
-        this.bestAgent = this.members[0];
-    }
-
-    checkBestAgent() {
-        let bestAgentGeneration = this.members[0];
-        for (const agent of this.members)
-            if (agent.score > bestAgentGeneration.score)
-                bestAgentGeneration = agent;
-        if (bestAgentGeneration.score > this.bestAgent.score) {
-            this.bestAgent = bestAgentGeneration;
-            console.log("New best agent found:", this.bestAgent);
-        }
-    }
-
-    nextGeneration(doCrossover) {
-        // let newMembers = [];
-        // this.normalizeFitness();
-        // console.log(this.members);
-        // let bestAgent = this.members[0];
-        // for (const agent of this.members)
-        //     if (agent.fitness > bestAgent.fitness)
-        //         bestAgent = agent;
-        // for (const agent of this.members)
-        //     newMembers.push(new Agent(bestAgent.generation + 1, this.mutationRate, bestAgent.brain));
-        // return newMembers;
-
-        // this.normalizeFitness();
-        // this.checkBestAgent();
-        // let newMembers = [];
-        // let bestAgent = this.members[0];
-        // for (const agent of this.members)
-        //     if (agent.fitness > bestAgent.fitness)
-        //         bestAgent = agent;
-        // for (const agent of this.members) {
-        //     let crossoverAgent = bestAgent;
-        //     agent.brain.crossover(crossoverAgent.brain.model, 0.5);
-        //     let newAgent = new Agent(agent.generation + 1, this.mutationRate, agent.brain);
-        //     newMembers.push(newAgent);
-        // }
-        // return newMembers;
-
-        this.normalizeFitness();
-        this.checkBestAgent();
-        let newMembers = [];
-        let pool = this.createPool(this.members);
-        while (newMembers.length < this.members.length) {
-            let selectedAgent = this.poolSelection(pool);
-            if (doCrossover) {
-                let crossoverAgent = this.poolSelection(pool, selectedAgent);
-                selectedAgent.brain.crossover(crossoverAgent.brain.model, 0.5);
-                let newCrossoverAgent = new Agent(crossoverAgent.generation + 1, this.mutationRate, crossoverAgent.brain);
-                newMembers.push(newCrossoverAgent);
-            }
-            if (newMembers.length < this.members.length) {
-                let newAgent = new Agent(selectedAgent.generation + 1, this.mutationRate, selectedAgent.brain);
-                newMembers.push(newAgent);
-            }
-        }
-        return newMembers;
-    }
-
-    nextGeneration_old() {
-        // let newMembers = [];
-        // this.normalizeFitness();
-        // console.log(this.members);
-        // let bestAgent = this.members[0];
-        // for (const agent of this.members)
-        //     if (agent.fitness > bestAgent.fitness)
-        //         bestAgent = agent;
-        // for (const agent of this.members)
-        //     newMembers.push(new Agent(bestAgent.generation + 1, this.mutationRate, bestAgent.brain));
-        // return newMembers;
-
-        this.normalizeFitness();
-        this.checkBestAgent();
-        //console.log(this.members);
-        let newMembers = [];
-        let pool = this.createPool(this.members);
-        while (newMembers.length < this.members.length) {
-            let selectedAgent = this.poolSelection(pool);
-            let newAgent = new Agent(selectedAgent.generation + 1, this.mutationRate, selectedAgent.brain);
-            newMembers.push(newAgent);
-        }
-        return newMembers;
-    }
-
-    normalizeFitness() {
-        for (const member of this.members)
-            member.score = Math.pow(member.score, 2);
-        let sum = 0;
-        for (const member of this.members)
-            sum += member.score;
-        sum = sum || 1;
-        for (const member of this.members)
-            member.fitness = member.score / sum;
-    }
-
-    createPool(members) {
-        let pool = [];
-        members.forEach((member) => {
-            let fitness = Math.floor(member.fitness * 100) || 1;
-            for (let i = 0; i < fitness; i++) {
-                pool.push(member);
-            }
-        });
-        return pool;
-    }
-
-    poolSelection(pool, member) {
-        let selectedMember;
-        do {
-            selectedMember = pool[Math.floor(Math.random() * pool.length)];
-        } while (selectedMember == member);
-        return selectedMember;
+        } while (hasMoved && this.movesLeft > 0);
     }
 }
